@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/binary"
+	"flag"
 	"fmt"
 	"golang.org/x/crypto/ssh/terminal"
 	"math/rand"
@@ -8,21 +10,19 @@ import (
 	"strconv"
 	"syscall"
 	"time"
-	"flag"
-	"encoding/binary"
 )
 
 const H = 10
 const V = 22
 const LE = 2
 const TE = 2
-const LCD = 66 /* Line Clear Delay divided by 5 */
+const LCD = 66       /* Line Clear Delay divided by 5 */
 const FPS = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
-const SDR = 5 /* Soft Drop rate, 1 line per 5 frames (0.5G) */
-const DASD = 12 /* DAS delay in frames, NES = 16 */
-const DASR = 3 /* DAS rate in frames, NES = 6 */
-const HDLD = 0 /* Hard Drop Lock Delay, NES = ??? */
-const ARER = 0 /* Multiplier to new piece delay. NES = 1 */
+const SDR = 5        /* Soft Drop rate, 1 line per 5 frames (0.5G) */
+const DASD = 12      /* DAS delay in frames, NES = 16 */
+const DASR = 3       /* DAS rate in frames, NES = 6 */
+const HDLD = 0       /* Hard Drop Lock Delay, NES = ??? */
+const ARER = 0       /* Multiplier to new piece delay. NES = 1 */
 
 /* Controls - see linux/include/uapi/linux/input-event-codes.h */
 const DROP = 57
@@ -42,14 +42,14 @@ func hasZeros(ar [H]int) bool {
 }
 
 func cord(x int, y int) string {
-	return "\033[" + strconv.Itoa(y+TE) + ";" + strconv.Itoa((x+LE) << 1) + "H"
+	return "\033[" + strconv.Itoa(y+TE) + ";" + strconv.Itoa((x+LE)<<1) + "H"
 }
 
 func nextStr(h1 int, h2 int, str1 string, str2 string) string {
 	return cord(H+h1, (V>>1)+1) + str1 + cord(H+h2, (V>>1)+2) + str2
 }
 
-var(
+var (
 	nextShape = [8]string{nextStr(2, 2, "        ", "        "), nextStr(2, 2, "        ", ""),
 		nextStr(2, 2, "  ", "      "), nextStr(4, 2, "  ", "      "),
 		nextStr(2, 2, "    ", "    "), nextStr(3, 2, "    ", "    "),
@@ -74,35 +74,35 @@ var(
 	colors = [8]string{"\033[49m", "\033[46m", "\033[44m", "\033[47m",
 		"\033[43m", "\033[42m", "\033[45m", "\033[41m"}
 
-	speeds = []int {48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
-			2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+	speeds = []int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
 
-	ARE = [V]int {166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
-		      300, 300, 300, 300, 333, 333, 333, 333}
+	ARE = [V]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
+		300, 300, 300, 300, 333, 333, 333, 333}
 
-	keys [255]int
-	frameString string
-	bufKey int
-	nextFrame int64
-	frame int 
-	r = rand.New(rand.NewSource(time.Now().Unix()))
-	grid [V][H]int
-	curPiece [4][4][2]int
-	ghost [4][4][2]int
-	curType, curRotation int
-	nextType = r.Intn(7) + 1
+	keys                        [255]int
+	frameString                 string
+	bufKey                      int
+	nextFrame                   int64
+	frame                       int
+	r                           = rand.New(rand.NewSource(time.Now().Unix()))
+	grid                        [V][H]int
+	curPiece                    [4][4][2]int
+	ghost                       [4][4][2]int
+	curType, curRotation        int
+	nextType                    = r.Intn(7) + 1
 	level, lines, tlevel, score int
-	scores = [4]int{40, 100, 300, 1200}
-	exit bool
+	scores                      = [4]int{40, 100, 300, 1200}
+	exit                        bool
 )
 
 func dasCheck(das *int, last int, code int) bool {
 	if last != code {
 		(*das) = 0
-	} else if code == DOWN && (*das) % SDR == 0 {
+	} else if code == DOWN && (*das)%SDR == 0 {
 		(*das)++
 		return true
-	} else if (*das) == DASD || ((*das) > DASD && (*das - DASD) % DASR == 0) {
+	} else if (*das) == DASD || ((*das) > DASD && (*das-DASD)%DASR == 0) {
 		(*das)++
 		return true
 	} else {
@@ -130,13 +130,13 @@ func main() {
 
 	/* Draw UI */
 	set := cord(-1, 1) + " ┏" + cord(H, 1) + "┓ " +
-	      cord(-1, V) + " ┗" + cord(H, V) + "┛ " +
-	      cord(3, 0) + "\033[37mLINES-000" +
-	      cord(H+2, (V>>1)-6) + "\033[37mSCORE" +
-	      cord(H+2, (V>>1)-1) + "\033[37mNEXT" +
-	      cord(H+2, (V>>1)+5) + "\033[37mLEVEL" +
-	      fmt.Sprintf("\033[37m%s  %.2d", cord(H+2, (V>>1)+6), level) +
-	      fmt.Sprintf("\033[37m%s%.6d", cord(H+2, (V>>1)-5), score)
+		cord(-1, V) + " ┗" + cord(H, V) + "┛ " +
+		cord(3, 0) + "\033[37mLINES-000" +
+		cord(H+2, (V>>1)-6) + "\033[37mSCORE" +
+		cord(H+2, (V>>1)-1) + "\033[37mNEXT" +
+		cord(H+2, (V>>1)+5) + "\033[37mLEVEL" +
+		fmt.Sprintf("\033[37m%s  %.2d", cord(H+2, (V>>1)+6), level) +
+		fmt.Sprintf("\033[37m%s%.6d", cord(H+2, (V>>1)-5), score)
 	for y := TE + 2; y <= TE+V-1; y++ {
 		set += cord(-1, y-TE) + " ┃" + cord(H, y-TE) + "┃ "
 	}
@@ -144,7 +144,6 @@ func main() {
 		set += cord(x-LE, 1) + "━━" + cord(x-LE, V) + "━━"
 	}
 	fmt.Print(set)
-
 
 	newPiece()
 	var das, lastKey int
@@ -160,7 +159,9 @@ func main() {
 			}
 		}
 		if keys[DOWN] != 0 || bufKey == DOWN {
-			if(lastKey != DOWN) { das = DASD }
+			if lastKey != DOWN {
+				das = DASD
+			}
 			if dasCheck(&das, DOWN, DOWN) {
 				frame = 0
 			}
@@ -180,7 +181,7 @@ func main() {
 		}
 		bufKey = 0
 
-		if frame >= 0 && frame % speeds[level] == 0 {
+		if frame >= 0 && frame%speeds[level] == 0 {
 			s := move(0, 1, 0)
 			frameString += s
 			if s == "" { /* Lock piece in. */
@@ -206,7 +207,7 @@ func main() {
 		}
 		dt := nextFrame - time.Now().UnixNano()
 		if dt > 0 {
-			time.Sleep(time.Microsecond * time.Duration(dt / 1000))
+			time.Sleep(time.Microsecond * time.Duration(dt/1000))
 		}
 	}
 }
@@ -283,7 +284,7 @@ func getGhost(lastRotation int) (string, string) {
 	clear := printPiece(lastRotation, ghost, colors[0], "  ")
 	nGhost := ""
 	_, newGhost := canDrop()
-	nGhost = printPiece(curRotation, newGhost, "\033[37m\033[49m", "░░" )
+	nGhost = printPiece(curRotation, newGhost, "\033[37m\033[49m", "░░")
 	ghost = newGhost
 	return clear, nGhost
 }
@@ -305,7 +306,7 @@ func newPiece() {
 	nextType = r.Intn(7) + 1
 	_, newGhost := getGhost(curRotation)
 	frameString += newGhost + colors[0] + nextShape[0] + colors[nextType] + nextShape[nextType] +
-		       printPiece(curRotation, curPiece, colors[curType], "  ")
+		printPiece(curRotation, curPiece, colors[curType], "  ")
 }
 
 func flashLines(ar []int) {
@@ -343,7 +344,7 @@ func evalScore(ar []int) int {
 	list := make([][2]int, 0, 4)
 	first, last := ar[0], ar[0]
 	for _, n := range ar[1:] {
-		if n - 1 == last {
+		if n-1 == last {
 			last = n
 		} else {
 			list = append(list, [2]int{first, last})
@@ -352,7 +353,7 @@ func evalScore(ar []int) int {
 	}
 	list = append(list, [2]int{first, last})
 	for _, v := range list {
-		s += scores[v[1] - v[0]] * (level + 1)
+		s += scores[v[1]-v[0]] * (level + 1)
 	}
 	return s
 }
@@ -395,9 +396,9 @@ func checkLines() int {
 }
 
 type Event struct {
-	_ syscall.Timeval
-	Kind uint16
-	Code uint16
+	_     syscall.Timeval
+	Kind  uint16
+	Code  uint16
 	Value uint32
 }
 
