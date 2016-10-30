@@ -44,4 +44,4 @@ root $ reboot
 
 ``shell
 tetris -i /dev/input/by-id/kbd-your-keyboard-name
-``
+```
