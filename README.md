@@ -9,7 +9,8 @@ send an email to my gmail address: bendypauldron
 * Less than 500 lines of code.
 * Hard drop
 * Ghost piece
-* Various timings such as line clear delay, soft drop rate, DAS, hard drop lock delay,
+* Standard Rotation System.
+* Various timings such as line clear delay, soft drop rate, DAS, lock delay,
   and new piece delay. They can be configured in the source.
 * Next piece preview.
 * Classic scoring.

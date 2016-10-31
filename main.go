@@ -17,11 +17,11 @@ const V = 22
 const LE = 2
 const TE = 2
 const LCD = 66       /* Line Clear Delay divided by 5 */
+const LD = 22        /* Lock Delay in frames. */
 const FPS = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
 const SDR = 5        /* Soft Drop rate, 1 line per 5 frames (0.5G) */
 const DASD = 12      /* DAS delay in frames, NES = 16 */
 const DASR = 3       /* DAS rate in frames, NES = 6 */
-const HDLD = 0       /* Hard Drop Lock Delay, NES = ??? */
 const ARER = 0       /* Multiplier to new piece delay. NES = 1 */
 
 /* Controls - see linux/include/uapi/linux/input-event-codes.h */
@@ -80,6 +80,26 @@ var (
 	ARE = [V]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
 		300, 300, 300, 300, 333, 333, 333, 333}
 
+	cKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
+		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},    /*1->2*/
+		{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},   /*2->3*/
+		{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}} /*3->0*/
+
+	acKicks = [4][5][2]int{{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}}, /*0->3*/
+		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->0*/
+		{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*2->1*/
+		{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}  /*3->2*/
+
+	cLKicks = [4][5][2]int{{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}},
+		{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+		{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+		{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}}}
+
+	acLKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+		{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+		{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}},
+		{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}}}
+
 	keys                        [255]int
 	frameString                 string
 	bufKey                      int
@@ -89,27 +109,27 @@ var (
 	grid                        [V][H]int
 	curPiece                    [4][4][2]int
 	ghost                       [4][4][2]int
-	curType, curRotation        int
+	curType, rotation           int
 	nextType                    = r.Intn(7) + 1
 	level, lines, tlevel, score int
 	scores                      = [4]int{40, 100, 300, 1200}
+	lockCount                   int
 	exit                        bool
 )
 
 func dasCheck(das *int, last int, code int) bool {
 	if last != code {
 		(*das) = 0
+		return true
 	} else if code == DOWN && (*das)%SDR == 0 {
 		(*das)++
 		return true
 	} else if (*das) == DASD || ((*das) > DASD && (*das-DASD)%DASR == 0) {
 		(*das)++
 		return true
-	} else {
-		(*das)++
-		return false
 	}
-	return true
+	(*das)++
+	return false
 }
 
 func main() {
@@ -150,15 +170,12 @@ func main() {
 
 	for frame = 1; !exit; frame++ {
 		nextFrame = time.Now().UnixNano() + FPS
+		var moveString string
 		if bufKey == DROP {
 			can, _ := canDrop()
-			s := move(0, can, 0)
-			frameString += s
-			if s != "" {
-				frame = -HDLD
-			}
-		}
-		if keys[DOWN] != 0 || bufKey == DOWN {
+			moveString = move(0, can, rotation)
+			lockCount = LD
+		} else if keys[DOWN] != 0 || bufKey == DOWN {
 			if lastKey != DOWN {
 				das = DASD
 			}
@@ -168,45 +185,62 @@ func main() {
 			lastKey = DOWN
 		} else if keys[LEFT] != 0 || bufKey == LEFT {
 			if dasCheck(&das, lastKey, LEFT) {
-				frameString += move(-1, 0, 0)
+				moveString = move(-1, 0, rotation)
 			}
 			lastKey = LEFT
 		} else if keys[RIGHT] != 0 || bufKey == RIGHT {
 			if dasCheck(&das, lastKey, RIGHT) {
-				frameString += move(1, 0, 0)
+				moveString = move(1, 0, rotation)
 			}
 			lastKey = RIGHT
 		} else {
 			lastKey = 0
 		}
+		if bufKey != DROP && moveString != "" {
+			lockCount = 0
+		}
+		frameString += moveString
 		bufKey = 0
 
-		if frame >= 0 && frame%speeds[level] == 0 {
-			s := move(0, 1, 0)
+		addPiece := false
+		gravity := frame >= 0 && frame%speeds[level] == 0
+
+		/* Lock logic */
+		if lockCount == LD { /* Lock piece in. */
+			addPiece = true
+			for _, v := range curPiece[rotation] {
+				grid[v[1]][v[0]] = curType
+			}
+			nlines := checkLines()
+			if nlines > 0 {
+				lines += nlines
+				frameString += fmt.Sprintf("%s\033[37m%s%.3d", colors[0], cord(6, 0), lines)
+				printLevel()
+			}
+			newPiece()
+			if !isValid(curPiece[rotation]) {
+				exit = true
+			}
+			lockCount = 0
+		} else if lockCount > 0 {
+			lockCount++
+		} else if gravity {
+			var s string
+			s = move(0, 1, rotation)
 			frameString += s
-			if s == "" { /* Lock piece in. */
-				for _, v := range curPiece[curRotation] {
-					grid[v[1]][v[0]] = curType
-				}
-				nlines := checkLines()
-				if nlines > 0 {
-					lines += nlines
-					frameString += fmt.Sprintf("%s\033[37m%s%.3d", colors[0], cord(6, 0), lines)
-					printLevel()
-				}
-				pause(ARER * ARE[highestRow(curPiece[curRotation])])
-				newPiece()
-				if !isValid(curPiece[curRotation]) {
-					exit = true
-				}
+			if s == "" {
+				lockCount++
 			}
 		}
-		if frameString != "" {
-			fmt.Print(frameString)
-			frameString = ""
-		}
+
+		fmt.Print(frameString)
+		frameString = ""
+
 		dt := nextFrame - time.Now().UnixNano()
 		if dt > 0 {
+			if addPiece {
+				pause(ARER * ARE[highestRow(curPiece[rotation])])
+			}
 			time.Sleep(time.Microsecond * time.Duration(dt/1000))
 		}
 	}
@@ -245,7 +279,7 @@ func canDrop() (int, [4][4][2]int) {
 				piece[i][j] = [2]int{w[0], w[1] + 1}
 			}
 		}
-		valid = isValid(piece[curRotation])
+		valid = isValid(piece[rotation])
 		if valid {
 			save = piece
 			count++
@@ -254,44 +288,68 @@ func canDrop() (int, [4][4][2]int) {
 	return count, save
 }
 
-func move(dx int, dy int, r int) string {
-	backup := curPiece
-	lastRotation := curRotation
+func rotate(clockwise bool) string {
 	var str string
-	if r != 0 {
-		curRotation = (curRotation + r) % 4
+	var kicks *[5][2]int
+	lastRotation := rotation
+	if clockwise {
+		rotation = (rotation + 1) % 4
 	} else {
+		rotation = (rotation + 3) % 4
+	}
+	if clockwise && curType == 1 {
+		kicks = &cLKicks[rotation]
+	} else if !clockwise && curType == 1 {
+		kicks = &acLKicks[rotation]
+	} else if clockwise {
+		kicks = &cKicks[rotation]
+	} else {
+		kicks = &acKicks[rotation]
+	}
+	for i := 0; i < len(kicks) && str == ""; i++ {
+		str = move((*kicks)[i][0], -(*kicks)[i][1], lastRotation)
+	}
+	if str == "" {
+		rotation = lastRotation
+	} else {
+		lockCount = 0
+	}
+	return str
+}
+
+func move(dx int, dy int, lastRotation int) string {
+	backup := curPiece
+	var str string
+	if dx != 0 || dy != 0 {
 		for i, v := range curPiece {
 			for j, w := range v {
 				curPiece[i][j] = [2]int{w[0] + dx, w[1] + dy}
 			}
 		}
 	}
-	valid := isValid(curPiece[curRotation])
-	if valid && dy == 0 {
+	valid := isValid(curPiece[rotation])
+	if valid {
 		gclear, nghost := getGhost(lastRotation)
 		str += gclear + nghost
-	}
-	if !valid {
+	} else {
 		curPiece = backup
-		curRotation = lastRotation
 		return ""
 	}
-	return str + printPiece(lastRotation, backup, colors[0], "  ") + printPiece(curRotation, curPiece, colors[curType], "  ")
+	return str + printPiece(lastRotation, backup, colors[0], "  ") + printPiece(rotation, curPiece, colors[curType], "  ")
 }
 
 func getGhost(lastRotation int) (string, string) {
 	clear := printPiece(lastRotation, ghost, colors[0], "  ")
 	nGhost := ""
 	_, newGhost := canDrop()
-	nGhost = printPiece(curRotation, newGhost, "\033[37m\033[49m", "░░")
+	nGhost = printPiece(rotation, newGhost, "\033[37m\033[49m", "░░")
 	ghost = newGhost
 	return clear, nGhost
 }
 
-func printPiece(curRotationation int, piece [4][4][2]int, c string, char string) string {
+func printPiece(rotationation int, piece [4][4][2]int, c string, char string) string {
 	set := ""
-	for _, v := range piece[curRotationation] {
+	for _, v := range piece[rotationation] {
 		if v[1] >= 2 {
 			set += c + cord(v[0], v[1]) + char
 		}
@@ -300,13 +358,13 @@ func printPiece(curRotationation int, piece [4][4][2]int, c string, char string)
 }
 
 func newPiece() {
-	curRotation = 0
+	rotation = 0
 	curType = nextType
 	curPiece = shapes[curType]
 	nextType = r.Intn(7) + 1
-	_, newGhost := getGhost(curRotation)
+	_, newGhost := getGhost(rotation)
 	frameString += newGhost + colors[0] + nextShape[0] + colors[nextType] + nextShape[nextType] +
-		printPiece(curRotation, curPiece, colors[curType], "  ")
+		printPiece(rotation, curPiece, colors[curType], "  ")
 }
 
 func flashLines(ar []int) {
@@ -425,9 +483,9 @@ func bufferInput(kbd string) {
 			bufKey = int(ev.Code)
 			switch ev.Code {
 			case ACROTATE:
-				frameString += move(0, 0, 3)
+				frameString += rotate(false)
 			case CROTATE:
-				frameString += move(0, 0, 1)
+				frameString += rotate(true)
 			case 23:
 				tlevel++
 				printLevel()
