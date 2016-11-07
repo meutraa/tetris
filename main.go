@@ -12,12 +12,18 @@ import (
 	"time"
 )
 
+/* Size of playing field. Larger H will cause pieces to spawn off center. */
 const H = 10
 const V = 22
+
+/* Padding from left edge. */
 const LE = 2
+
+/* Padding from top edge. */
 const TE = 2
+
 const LCD = 66       /* Line Clear Delay divided by 5 */
-const LD = 22        /* Lock Delay in frames. */
+const LD = 28        /* Lock Delay in frames. */
 const FPS = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
 const SDR = 5        /* Soft Drop rate, 1 line per 5 frames (0.5G) */
 const DASD = 12      /* DAS delay in frames, NES = 16 */
@@ -31,6 +37,84 @@ const DOWN = 32
 const RIGHT = 33
 const CROTATE = 37
 const ACROTATE = 36
+const HOLD = 18
+
+/* Positions of UI elements. */
+var scoreX = H + 2
+var scoreY = 2
+var nextX = H + 2
+var nextY = (V >> 1) - 2
+var levelX = H + 2
+var levelY = (V >> 1) + 2
+var holdX = H + 2
+var holdY = V - 2
+
+var shapes = [8][4][4][2]int{{}, /* Blank */
+	{{{3, 2}, {4, 2}, {5, 2}, {6, 2}}, {{5, 1}, {5, 2}, {5, 3}, {5, 4}}, /* I */
+		{{3, 3}, {4, 3}, {5, 3}, {6, 3}}, {{4, 1}, {4, 2}, {4, 3}, {4, 4}}},
+	{{{3, 2}, {3, 3}, {4, 3}, {5, 3}}, {{5, 2}, {4, 2}, {4, 3}, {4, 4}}, /* J */
+		{{5, 4}, {5, 3}, {4, 3}, {3, 3}}, {{3, 4}, {4, 4}, {4, 3}, {4, 2}}},
+	{{{3, 3}, {4, 3}, {5, 3}, {5, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 4}}, /* L */
+		{{5, 3}, {4, 3}, {3, 3}, {3, 4}}, {{4, 4}, {4, 3}, {4, 2}, {3, 2}}},
+	{{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}, /* O */
+		{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}},
+	{{{3, 3}, {4, 3}, {4, 2}, {5, 2}}, {{4, 2}, {4, 3}, {5, 3}, {5, 4}}, /* S */
+		{{5, 3}, {4, 3}, {4, 4}, {3, 4}}, {{4, 4}, {4, 3}, {3, 3}, {3, 2}}},
+	{{{3, 3}, {4, 3}, {5, 3}, {4, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 3}}, /* T */
+		{{3, 3}, {4, 3}, {5, 3}, {4, 4}}, {{4, 2}, {4, 3}, {4, 4}, {3, 3}}},
+	{{{3, 2}, {4, 2}, {4, 3}, {5, 3}}, {{5, 2}, {5, 3}, {4, 3}, {4, 4}}, /* Z */
+		{{5, 4}, {4, 4}, {4, 3}, {3, 3}}, {{3, 4}, {3, 3}, {4, 3}, {4, 2}}}}
+
+var colors = [8]string{"\033[49m", "\033[46m", "\033[44m", "\033[47m",
+	"\033[43m", "\033[42m", "\033[45m", "\033[41m"}
+
+var speeds = []int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
+	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+
+var ARE = [V]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
+	300, 300, 300, 300, 333, 333, 333, 333}
+
+var cKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
+	{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},    /*1->2*/
+	{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},   /*2->3*/
+	{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}} /*3->0*/
+
+var acKicks = [4][5][2]int{{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}}, /*0->3*/
+	{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->0*/
+	{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*2->1*/
+	{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}  /*3->2*/
+
+var cLKicks = [4][5][2]int{{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}},
+	{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+	{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+	{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}}}
+
+var acLKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+	{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+	{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}},
+	{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}}}
+
+var keys [255]int
+var frameString string
+var bufKey int
+var nextFrame int64
+var frame int
+var r = rand.New(rand.NewSource(time.Now().Unix()))
+var grid [V][H]int
+var curPiece [4][4][2]int
+var ghost [4][4][2]int
+var curType int
+var rotation int
+var holdPiece int
+var held bool
+var nextType = r.Intn(7) + 1
+var level int
+var lines int
+var tlevel int
+var score int
+var scores = [4]int{40, 100, 300, 1200}
+var lockCount int
+var exit bool
 
 func hasZeros(ar [H]int) bool {
 	for _, v := range ar {
@@ -45,77 +129,32 @@ func cord(x int, y int) string {
 	return "\033[" + strconv.Itoa(y+TE) + ";" + strconv.Itoa((x+LE)<<1) + "H"
 }
 
-func nextStr(h1 int, h2 int, str1 string, str2 string) string {
-	return cord(H+h1, (V>>1)+1) + str1 + cord(H+h2, (V>>1)+2) + str2
+func pieceString(x int, y int, shape int) string {
+	switch shape {
+	case 1:
+		return cord(x, y) + colors[shape] + "        " +
+			cord(x, y+1) + colors[0] + "        "
+	case 2:
+		return cord(x, y) + colors[shape] + "  " + colors[0] + "      " +
+			cord(x, y+1) + colors[shape] + "      " + colors[0] + "  "
+	case 3:
+		return cord(x, y) + colors[0] + "    " + colors[shape] + "  " + colors[0] + "  " +
+			cord(x, y+1) + colors[shape] + "      " + colors[0] + "  "
+	case 4:
+		return cord(x, y) + colors[shape] + "    " + colors[0] + "    " +
+			cord(x, y+1) + colors[shape] + "    " + colors[0] + "    "
+	case 5:
+		return cord(x, y) + colors[0] + "  " + colors[shape] + "    " + colors[0] + "  " +
+			cord(x, y+1) + colors[shape] + "    " + colors[0] + "    "
+	case 6:
+		return cord(x, y) + colors[0] + "  " + colors[shape] + "  " + colors[0] + "    " +
+			cord(x, y+1) + colors[shape] + "      " + colors[0] + "  "
+	case 7:
+		return cord(x, y) + colors[shape] + "    " + colors[0] + "    " +
+			cord(x, y+1) + "  " + colors[shape] + "    " + colors[0] + "  "
+	}
+	return ""
 }
-
-var (
-	nextShape = [8]string{nextStr(2, 2, "        ", "        "), nextStr(2, 2, "        ", ""),
-		nextStr(2, 2, "  ", "      "), nextStr(4, 2, "  ", "      "),
-		nextStr(2, 2, "    ", "    "), nextStr(3, 2, "    ", "    "),
-		nextStr(3, 2, "  ", "      "), nextStr(2, 3, "    ", "    ")}
-
-	shapes = [8][4][4][2]int{{}, /* Blank */
-		{{{3, 2}, {4, 2}, {5, 2}, {6, 2}}, {{5, 1}, {5, 2}, {5, 3}, {5, 4}}, /* I */
-			{{3, 3}, {4, 3}, {5, 3}, {6, 3}}, {{4, 1}, {4, 2}, {4, 3}, {4, 4}}},
-		{{{3, 2}, {3, 3}, {4, 3}, {5, 3}}, {{5, 2}, {4, 2}, {4, 3}, {4, 4}}, /* J */
-			{{5, 4}, {5, 3}, {4, 3}, {3, 3}}, {{3, 4}, {4, 4}, {4, 3}, {4, 2}}},
-		{{{3, 3}, {4, 3}, {5, 3}, {5, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 4}}, /* L */
-			{{5, 3}, {4, 3}, {3, 3}, {3, 4}}, {{4, 4}, {4, 3}, {4, 2}, {3, 2}}},
-		{{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}, /* O */
-			{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}},
-		{{{3, 3}, {4, 3}, {4, 2}, {5, 2}}, {{4, 2}, {4, 3}, {5, 3}, {5, 4}}, /* S */
-			{{5, 3}, {4, 3}, {4, 4}, {3, 4}}, {{4, 4}, {4, 3}, {3, 3}, {3, 2}}},
-		{{{3, 3}, {4, 3}, {5, 3}, {4, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 3}}, /* T */
-			{{3, 3}, {4, 3}, {5, 3}, {4, 4}}, {{4, 2}, {4, 3}, {4, 4}, {3, 3}}},
-		{{{3, 2}, {4, 2}, {4, 3}, {5, 3}}, {{5, 2}, {5, 3}, {4, 3}, {4, 4}}, /* Z */
-			{{5, 4}, {4, 4}, {4, 3}, {3, 3}}, {{3, 4}, {3, 3}, {4, 3}, {4, 2}}}}
-
-	colors = [8]string{"\033[49m", "\033[46m", "\033[44m", "\033[47m",
-		"\033[43m", "\033[42m", "\033[45m", "\033[41m"}
-
-	speeds = []int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
-		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
-
-	ARE = [V]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
-		300, 300, 300, 300, 333, 333, 333, 333}
-
-	cKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
-		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},    /*1->2*/
-		{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},   /*2->3*/
-		{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}} /*3->0*/
-
-	acKicks = [4][5][2]int{{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}}, /*0->3*/
-		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->0*/
-		{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*2->1*/
-		{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}  /*3->2*/
-
-	cLKicks = [4][5][2]int{{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}},
-		{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
-		{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
-		{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}}}
-
-	acLKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
-		{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
-		{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}},
-		{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}}}
-
-	keys                        [255]int
-	frameString                 string
-	bufKey                      int
-	nextFrame                   int64
-	frame                       int
-	r                           = rand.New(rand.NewSource(time.Now().Unix()))
-	grid                        [V][H]int
-	curPiece                    [4][4][2]int
-	ghost                       [4][4][2]int
-	curType, rotation           int
-	nextType                    = r.Intn(7) + 1
-	level, lines, tlevel, score int
-	scores                      = [4]int{40, 100, 300, 1200}
-	lockCount                   int
-	exit                        bool
-)
 
 func dasCheck(das *int, last int, code int) bool {
 	if last != code {
@@ -149,14 +188,15 @@ func main() {
 	defer fmt.Print("\033[2j\033[?25h\033[49m\033[39m", cord(-LE, V+2))
 
 	/* Draw UI */
-	set := cord(-1, 1) + " ┏" + cord(H, 1) + "┓ " +
+	set := "\033[37m" + cord(-1, 1) + " ┏" + cord(H, 1) + "┓ " +
 		cord(-1, V) + " ┗" + cord(H, V) + "┛ " +
-		cord(3, 0) + "\033[37mLINES-000" +
-		cord(H+2, (V>>1)-6) + "\033[37mSCORE" +
-		cord(H+2, (V>>1)-1) + "\033[37mNEXT" +
-		cord(H+2, (V>>1)+5) + "\033[37mLEVEL" +
-		fmt.Sprintf("\033[37m%s  %.2d", cord(H+2, (V>>1)+6), level) +
-		fmt.Sprintf("\033[37m%s%.6d", cord(H+2, (V>>1)-5), score)
+		cord(3, 0) + "LINES-000" +
+		cord(scoreX, scoreY) + "SCORE" +
+		cord(holdX, holdY-2) + "HOLD" +
+		cord(nextX, nextY-2) + "NEXT" +
+		cord(levelX, levelY) + "LEVEL" +
+		fmt.Sprintf("%s  %.2d", cord(levelX, levelY+2), level) +
+		fmt.Sprintf("%s%.6d", cord(scoreX, scoreY+2), score)
 	for y := TE + 2; y <= TE+V-1; y++ {
 		set += cord(-1, y-TE) + " ┃" + cord(H, y-TE) + "┃ "
 	}
@@ -165,7 +205,7 @@ func main() {
 	}
 	fmt.Print(set)
 
-	newPiece()
+	newPiece(0)
 	var das, lastKey int
 
 	for frame = 1; !exit; frame++ {
@@ -217,7 +257,8 @@ func main() {
 				frameString += fmt.Sprintf("%s\033[37m%s%.3d", colors[0], cord(6, 0), lines)
 				printLevel()
 			}
-			newPiece()
+			held = false
+			newPiece(0)
 			if !isValid(curPiece[rotation]) {
 				exit = true
 			}
@@ -256,7 +297,7 @@ func printLevel() {
 	if tlevel > level {
 		level = tlevel
 	}
-	frameString += fmt.Sprintf("%s\033[37m%s  %.2d", colors[0], cord(H+2, (V>>1)+6), level)
+	frameString += fmt.Sprintf("%s\033[37m%s  %.2d", colors[0], cord(levelX, levelY+2), level)
 }
 
 func isValid(piece [4][2]int) bool {
@@ -357,13 +398,17 @@ func printPiece(rotationation int, piece [4][4][2]int, c string, char string) st
 	return set
 }
 
-func newPiece() {
+func newPiece(shape int) {
 	rotation = 0
-	curType = nextType
+	if shape != 0 {
+		curType = shape
+	} else {
+		curType = nextType
+		nextType = r.Intn(7) + 1
+	}
 	curPiece = shapes[curType]
-	nextType = r.Intn(7) + 1
 	_, newGhost := getGhost(rotation)
-	frameString += newGhost + colors[0] + nextShape[0] + colors[nextType] + nextShape[nextType] +
+	frameString += newGhost + pieceString(nextX, nextY, nextType) +
 		printPiece(rotation, curPiece, colors[curType], "  ")
 }
 
@@ -448,7 +493,7 @@ func checkLines() int {
 		grid = clearLines(lines)
 		reprint()
 		score += evalScore(lines)
-		frameString += fmt.Sprintf("\033[49m\033[37m%s%.6d", cord(H+2, (V>>1)-5), score)
+		frameString += fmt.Sprintf("\033[49m\033[37m%s%.6d", cord(scoreX, scoreY+2), score)
 	}
 	return len(lines)
 }
@@ -486,6 +531,17 @@ func bufferInput(kbd string) {
 				frameString += rotate(false)
 			case CROTATE:
 				frameString += rotate(true)
+			case HOLD:
+				if held {
+					break
+				}
+				buf := holdPiece
+				holdPiece = curType
+				frameString += pieceString(holdX, holdY, holdPiece) +
+					printPiece(rotation, curPiece, colors[0], "  ") +
+					printPiece(rotation, ghost, colors[0], "  ")
+				newPiece(buf)
+				held = true
 			case 23:
 				tlevel++
 				printLevel()
