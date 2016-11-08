@@ -1,4 +1,4 @@
-# mm (19311931)
+# Tetris
 A tetris clone modeled mostly after the NES version, but with some updates such
 as ghost pieces and hard dropping. Does not use the console input driver.
 

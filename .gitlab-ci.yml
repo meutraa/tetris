@@ -1,6 +1,0 @@
-before_script:
-  - apt-get update -qq && apt-get install -y -qq golang && go get golang.org/x/crypto/ssh/terminal
-
-main:
-  script:
-    - go build
