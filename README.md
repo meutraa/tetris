@@ -43,6 +43,6 @@ root $ gpasswd -a "$USER" input
 root $ reboot
 ```
 
-``shell
+```shell
 tetris -i /dev/input/by-id/kbd-your-keyboard-name
 ```
