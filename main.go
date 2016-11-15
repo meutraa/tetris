@@ -11,112 +11,90 @@ import (
 	"time"
 )
 
-/* TODO
- * Holding left during line clear pause causes key to get stuck.
- * Ghost piece is wrong when alternative rotation states occur.
- */
+/* TODO Holding left during line clear pause causes key to get stuck.
+ * Ghost piece is wrong when alternative rotation states occur. */
 
-/* Size of playing field. Larger H will cause pieces to spawn off center. */
-const H = 10
-const V = 22
+const (
+	lineClearDelay    = 66       /* *5 for real value */
+	lockDelay         = 32       /* in frames */
+	fps               = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
+	softDropRate      = 1        /* frames per drop. */
+	dasDelay          = 12       /* in frames, NES = 16 */
+	dasRate           = 3        /* DAS rate in frames, NES = 6 */
+	newPieceDelayMult = 0        /* Multiplier to new piece delay. NES = 1 */
 
-/* Padding from left edge. */
-const LE = 2
+	/* Controls - see linux/include/uapi/linux/input-event-codes.h */
+	softDropKey, hardDropKey      = 32, 57
+	leftKey, rightKey             = 31, 33
+	rotateLeftKey, rotateRightKey = 36, 37
+	holdKey                       = 18
 
-/* Padding from top edge. */
-const TE = 2
+	/* UI positions */
+	width, height  = 10, 22
+	scoreX, scoreY = width + 2, 2
+	nextX, nextY   = width + 2, (height >> 1) - 2
+	levelX, levelY = width + 2, (height >> 1) + 2
+	holdX, holdY   = width + 2, height - 2
+)
 
-const LCD = 66       /* Line Clear Delay divided by 5 */
-const LD = 32        /* Lock Delay in frames. */
-const FPS = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
-const SDR = 1        /* Soft Drop rate, 1 line per 5 frames (0.5G) */
-const DASD = 12      /* DAS delay in frames, NES = 16 */
-const DASR = 3       /* DAS rate in frames, NES = 6 */
-const ARER = 0       /* Multiplier to new piece delay. NES = 1 */
+var (
+	shapes = [8][4][4][2]int{{}, /* Blank */
+		{{{3, 2}, {4, 2}, {5, 2}, {6, 2}}, {{5, 1}, {5, 2}, {5, 3}, {5, 4}}, /* I */
+			{{3, 3}, {4, 3}, {5, 3}, {6, 3}}, {{4, 1}, {4, 2}, {4, 3}, {4, 4}}},
+		{{{3, 2}, {3, 3}, {4, 3}, {5, 3}}, {{5, 2}, {4, 2}, {4, 3}, {4, 4}}, /* J */
+			{{5, 4}, {5, 3}, {4, 3}, {3, 3}}, {{3, 4}, {4, 4}, {4, 3}, {4, 2}}},
+		{{{3, 3}, {4, 3}, {5, 3}, {5, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 4}}, /* L */
+			{{5, 3}, {4, 3}, {3, 3}, {3, 4}}, {{4, 4}, {4, 3}, {4, 2}, {3, 2}}},
+		{{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}, /* O */
+			{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}},
+		{{{3, 3}, {4, 3}, {4, 2}, {5, 2}}, {{4, 2}, {4, 3}, {5, 3}, {5, 4}}, /* S */
+			{{5, 3}, {4, 3}, {4, 4}, {3, 4}}, {{4, 4}, {4, 3}, {3, 3}, {3, 2}}},
+		{{{3, 3}, {4, 3}, {5, 3}, {4, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 3}}, /* T */
+			{{3, 3}, {4, 3}, {5, 3}, {4, 4}}, {{4, 2}, {4, 3}, {4, 4}, {3, 3}}},
+		{{{3, 2}, {4, 2}, {4, 3}, {5, 3}}, {{5, 2}, {5, 3}, {4, 3}, {4, 4}}, /* Z */
+			{{5, 4}, {4, 4}, {4, 3}, {3, 3}}, {{3, 4}, {3, 3}, {4, 3}, {4, 2}}}}
 
-/* Controls - see linux/include/uapi/linux/input-event-codes.h */
-const DROP = 57
-const LEFT = 31
-const DOWN = 32
-const RIGHT = 33
-const CROTATE = 37
-const ACROTATE = 36
-const HOLD = 18
+	colors = [8]string{"\033[49m", "\033[46m", "\033[44m", "\033[47m",
+		"\033[43m", "\033[42m", "\033[45m", "\033[41m"}
 
-/* Positions of UI elements. */
-var scoreX = H + 2
-var scoreY = 2
-var nextX = H + 2
-var nextY = (V >> 1) - 2
-var levelX = H + 2
-var levelY = (V >> 1) + 2
-var holdX = H + 2
-var holdY = V - 2
+	speeds = [...]int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
 
-var shapes = [8][4][4][2]int{{}, /* Blank */
-	{{{3, 2}, {4, 2}, {5, 2}, {6, 2}}, {{5, 1}, {5, 2}, {5, 3}, {5, 4}}, /* I */
-		{{3, 3}, {4, 3}, {5, 3}, {6, 3}}, {{4, 1}, {4, 2}, {4, 3}, {4, 4}}},
-	{{{3, 2}, {3, 3}, {4, 3}, {5, 3}}, {{5, 2}, {4, 2}, {4, 3}, {4, 4}}, /* J */
-		{{5, 4}, {5, 3}, {4, 3}, {3, 3}}, {{3, 4}, {4, 4}, {4, 3}, {4, 2}}},
-	{{{3, 3}, {4, 3}, {5, 3}, {5, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 4}}, /* L */
-		{{5, 3}, {4, 3}, {3, 3}, {3, 4}}, {{4, 4}, {4, 3}, {4, 2}, {3, 2}}},
-	{{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}, /* O */
-		{{4, 2}, {4, 3}, {5, 2}, {5, 3}}, {{4, 2}, {4, 3}, {5, 2}, {5, 3}}},
-	{{{3, 3}, {4, 3}, {4, 2}, {5, 2}}, {{4, 2}, {4, 3}, {5, 3}, {5, 4}}, /* S */
-		{{5, 3}, {4, 3}, {4, 4}, {3, 4}}, {{4, 4}, {4, 3}, {3, 3}, {3, 2}}},
-	{{{3, 3}, {4, 3}, {5, 3}, {4, 2}}, {{4, 2}, {4, 3}, {4, 4}, {5, 3}}, /* T */
-		{{3, 3}, {4, 3}, {5, 3}, {4, 4}}, {{4, 2}, {4, 3}, {4, 4}, {3, 3}}},
-	{{{3, 2}, {4, 2}, {4, 3}, {5, 3}}, {{5, 2}, {5, 3}, {4, 3}, {4, 4}}, /* Z */
-		{{5, 4}, {4, 4}, {4, 3}, {3, 3}}, {{3, 4}, {3, 3}, {4, 3}, {4, 2}}}}
+	ARE = [height]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
+		300, 300, 300, 300, 333, 333, 333, 333}
 
-var colors = [8]string{"\033[49m", "\033[46m", "\033[44m", "\033[47m",
-	"\033[43m", "\033[42m", "\033[45m", "\033[41m"}
+	/* cKicks, acKicks, cLKicks, acLKicks */
+	kicks = [4][4][5][2]int{{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
+		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->2*/
+		{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},    /*2->3*/
+		{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}, /*3->0*/
 
-var speeds = []int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
-	2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+		{{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}}, /*0->3*/
+			{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->0*/
+			{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*2->1*/
+			{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}, /*3->2*/
 
-var ARE = [V]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
-	300, 300, 300, 300, 333, 333, 333, 333}
+		{{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}},
+			{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+			{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+			{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}}},
 
-var cKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
-	{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},    /*1->2*/
-	{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}},   /*2->3*/
-	{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}} /*3->0*/
+		{{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
+			{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
+			{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}},
+			{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}}}}
 
-var acKicks = [4][5][2]int{{{0, 0}, {1, 0}, {1, 1}, {0, -2}, {1, -2}}, /*0->3*/
-	{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->0*/
-	{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*2->1*/
-	{{0, 0}, {-1, 0}, {-1, -1}, {0, 2}, {-1, 2}}}  /*3->2*/
+	keyStates                    [255][2]bool
+	r                            = rand.New(rand.NewSource(time.Now().Unix()))
+	grid                         [height][width]int
+	curPiece, ghost              [4][4][2]int
+	curType, rotation, holdPiece int
+	exit, held                   bool
+	nextType                     = r.Intn(7) + 1
+	scores                       = [4]int{40, 100, 300, 1200}
+)
 
-var cLKicks = [4][5][2]int{{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}},
-	{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
-	{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
-	{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}}}
-
-var acLKicks = [4][5][2]int{{{0, 0}, {-1, 0}, {2, 0}, {-1, 2}, {2, -1}},
-	{{0, 0}, {2, 0}, {-1, 0}, {2, 1}, {-1, -2}},
-	{{0, 0}, {1, 0}, {-2, 0}, {1, -2}, {-2, 1}},
-	{{0, 0}, {-2, 0}, {1, 0}, {-2, -1}, {1, 2}}}
-
-var keys [255][2]bool
-
-//var out string
-var r = rand.New(rand.NewSource(time.Now().Unix()))
-var grid [V][H]int
-var curPiece [4][4][2]int
-var ghost [4][4][2]int
-var curType int
-var rotation int
-var holdPiece int
-var held bool
-var nextType = r.Intn(7) + 1
-var level int
-var lines int
-var score int
-var scores = [4]int{40, 100, 300, 1200}
-var exit bool
-
-func hasZeros(ar [H]int) bool {
+func hasZeros(ar [width]int) bool {
 	for _, v := range ar {
 		if v == 0 {
 			return true
@@ -126,7 +104,7 @@ func hasZeros(ar [H]int) bool {
 }
 
 func cord(x int, y int) string {
-	return fmt.Sprintf("\033[%d;%dH", y+TE, (x+LE)<<1)
+	return fmt.Sprintf("\033[%d;%dH", y+2, (x+2)<<1)
 }
 
 func uiPieceString(x int, y int, shape int) string {
@@ -161,15 +139,17 @@ func main() {
 	}
 	go in(kbd)
 
+	var lines, level, score, das, sddas, lockCount int
+
 	/* Configure terminal. */
-	oldState, _ := terminal.MakeRaw(0)
-	defer terminal.Restore(0, oldState)
+	t, _ := terminal.MakeRaw(0)
+	defer terminal.Restore(0, t)
 	fmt.Print("\033[2J\033[1;1H\033[?25l\033[39m")
-	defer fmt.Print("\033[2j\033[?25h\033[49m\033[39m", cord(-LE, V+2))
+	defer fmt.Print("\033[2j\033[?25h\033[49m\033[39m", cord(-2, height+2))
 
 	/* Draw UI */
-	set := "\033[37m" + cord(-1, 1) + " ┏" + cord(H, 1) + "┓ " +
-		cord(-1, V) + " ┗" + cord(H, V) + "┛ " +
+	frameBuffer := "\033[37m" + cord(-1, 1) + " ┏" + cord(width, 1) + "┓ " +
+		cord(-1, height) + " ┗" + cord(width, height) + "┛ " +
 		cord(3, 0) + "LINES-000" +
 		cord(scoreX, scoreY) + "SCORE" +
 		cord(holdX, holdY-2) + "HOLD" +
@@ -177,76 +157,74 @@ func main() {
 		cord(levelX, levelY) + "LEVEL" +
 		fmt.Sprintf("%s  %.2d", cord(levelX, levelY+2), level) +
 		fmt.Sprintf("%s%.6d", cord(scoreX, scoreY+2), score)
-	for y := TE + 2; y <= TE+V-1; y++ {
-		set += cord(-1, y-TE) + " ┃" + cord(H, y-TE) + "┃ "
+	for y := 4; y <= height+1; y++ {
+		frameBuffer += cord(-1, y-2) + " ┃" + cord(width, y-2) + "┃ "
 	}
-	for x := LE; x <= LE+H-1; x++ {
-		set += cord(x-LE, 1) + "━━" + cord(x-LE, V) + "━━"
+	for x := 2; x <= width+1; x++ {
+		frameBuffer += cord(x-2, 1) + "━━" + cord(x-2, height) + "━━"
 	}
-	set += newPiece(0)
-	fmt.Print(set)
-
-	var das, sddas, lockCount int
+	frameBuffer += newPiece(0)
+	fmt.Print(frameBuffer)
 
 	/* Start main loop. */
 	for frame := 1; !exit; frame++ {
-		var out string
-		nextFrame := time.Now().UnixNano() + FPS
+		frameBuffer = ""
+		nextFrame := time.Now().UnixNano() + fps
 
 		/* Handle key input. */
-		if keys[DROP][0] {
+		if keyStates[hardDropKey][0] {
 			can, _ := canDrop()
-			out += move(0, can, rotation)
-			lockCount = LD
-			keys[DROP] = [2]bool{false, false}
-		} else if keys[HOLD][0] && !held {
+			frameBuffer += move(0, can, rotation)
+			lockCount = lockDelay
+			keyStates[hardDropKey] = [2]bool{false, false}
+		} else if keyStates[holdKey][0] && !held {
 			buf := holdPiece
 			holdPiece = curType
-			out += uiPieceString(holdX, holdY, holdPiece) +
+			frameBuffer += uiPieceString(holdX, holdY, holdPiece) +
 				pieceString(curPiece[rotation], colors[0], "  ") +
 				pieceString(ghost[rotation], colors[0], "  ") +
 				newPiece(buf)
 			held = true
-			keys[HOLD] = [2]bool{false, false}
+			keyStates[holdKey] = [2]bool{false, false}
 		} else {
 			var m string
 
-			if keys[LEFT][0] {
+			if keyStates[leftKey][0] {
 				if das > 0 {
 					das = 0
 				}
-				if das == 0 || -das == DASD || (-das > DASD && (-das-DASD)%DASR == 0) {
+				if das == 0 || -das == dasDelay || (-das > dasDelay && (-das-dasDelay)%dasRate == 0) {
 					m += move(-1, 0, rotation)
 				}
 				das--
-				keys[LEFT][1] = true
-			} else if keys[RIGHT][0] {
+				keyStates[leftKey][1] = true
+			} else if keyStates[rightKey][0] {
 				if das < 0 {
 					das = 0
 				}
-				if das == 0 || das == DASD || (das > DASD && (das-DASD)%DASR == 0) {
+				if das == 0 || das == dasDelay || (das > dasDelay && (das-dasDelay)%dasRate == 0) {
 					m += move(1, 0, rotation)
 				}
 				das++
-				keys[RIGHT][1] = true
+				keyStates[rightKey][1] = true
 			} else {
 				das = 0
 			}
 
-			if keys[ACROTATE][0] {
+			if keyStates[rotateLeftKey][0] {
 				m += rotate(false)
-				keys[ACROTATE] = [2]bool{false, false}
-			} else if keys[CROTATE][0] {
+				keyStates[rotateLeftKey] = [2]bool{false, false}
+			} else if keyStates[rotateRightKey][0] {
 				m += rotate(true)
-				keys[CROTATE] = [2]bool{false, false}
+				keyStates[rotateRightKey] = [2]bool{false, false}
 			}
 
-			if keys[DOWN][0] {
-				if sddas%SDR == 0 {
+			if keyStates[softDropKey][0] {
+				if sddas%softDropRate == 0 {
 					frame = 0
 				}
 				sddas++
-				keys[DOWN][1] = true
+				keyStates[softDropKey][1] = true
 			} else {
 				sddas = 0
 			}
@@ -254,11 +232,11 @@ func main() {
 			if m != "" {
 				lockCount = 0
 			}
-			out += m
+			frameBuffer += m
 		}
 
 		/* Lock logic */
-		if lockCount == LD { /* Lock piece in. */
+		if lockCount == lockDelay { /* Lock piece in. */
 			for _, v := range curPiece[rotation] {
 				grid[v[1]][v[0]] = curType
 			}
@@ -273,36 +251,35 @@ func main() {
 			if len(l) > 0 {
 				nextFrame += flashLines(l)
 				grid = clearLines(l)
-				out += refreshString()
-				score += evalScore(l)
-				out += fmt.Sprintf("\033[49m\033[37m%s%.6d", cord(scoreX, scoreY+2), score)
+				frameBuffer += refreshString()
+				score += evalScore(level, l)
+				frameBuffer += fmt.Sprintf("\033[49m\033[37m%s%.6d", cord(scoreX, scoreY+2), score)
 			}
-			nlines := len(l)
 
-			if nlines > 0 {
-				lines += nlines
-				out += fmt.Sprintf("%s\033[37m%s%.3d", colors[0], cord(6, 0), lines)
-				out += levelString()
+			if len(l) > 0 {
+				lines += len(l)
+				level = lines / 10
+				frameBuffer += fmt.Sprintf("%s\033[37m%s%.3d", colors[0], cord(6, 0), lines)
+				frameBuffer += fmt.Sprintf("%s\033[37m%s  %.2d", colors[0], cord(levelX, levelY+2), level)
 			}
 			held = false
-			out += newPiece(0)
+			frameBuffer += newPiece(0)
 			if !isValid(curPiece[rotation]) {
 				exit = true
 			}
 			lockCount = 0
-			nextFrame += pause(ARER * ARE[highestRow(curPiece[rotation])])
+			nextFrame += pause(newPieceDelayMult * ARE[highestRow(curPiece[rotation])])
 		} else if lockCount > 0 {
 			lockCount++
-		} else if frame >= 0 && frame % speeds[level] == 0 {
+		} else if frame >= 0 && frame%speeds[level] == 0 {
 			s := move(0, 1, rotation)
-			out += s
+			frameBuffer += s
 			if s == "" {
 				lockCount++
 			}
 		}
 
-		/* Print and clear the frame string. */
-		fmt.Print(out)
+		fmt.Print(frameBuffer)
 
 		/* Wait for the next frame time. */
 		dt := nextFrame - time.Now().UnixNano()
@@ -317,14 +294,9 @@ func pause(duration int) int64 {
 	return int64(duration) * 1000000
 }
 
-func levelString() string {
-	level = lines / 10
-	return fmt.Sprintf("%s\033[37m%s  %.2d", colors[0], cord(levelX, levelY+2), level)
-}
-
 func isValid(piece [4][2]int) bool {
 	for _, v := range piece {
-		if v[0] < 0 || v[0] >= H || v[1] < 0 || v[1] >= V || grid[v[1]][v[0]] != 0 {
+		if v[0] < 0 || v[0] >= width || v[1] < 0 || v[1] >= height || grid[v[1]][v[0]] != 0 {
 			return false
 		}
 	}
@@ -352,35 +324,26 @@ func canDrop() (int, [4][4][2]int) {
 }
 
 func rotate(clockwise bool) string {
-	var str string
-	var kicks *[5][2]int
 	lastRotation := rotation
-	switch {
-	case clockwise:
+	var k int
+	if clockwise {
 		rotation = (rotation + 1) % 4
-		switch curType {
-		case 1:
-			kicks = &cLKicks[rotation]
-		default:
-			kicks = &cKicks[rotation]
-		}
-	default:
+	} else {
 		rotation = (rotation + 3) % 4
-		switch curType {
-		case 1:
-			kicks = &acLKicks[rotation]
-		default:
-			kicks = &acKicks[rotation]
-		}
+		k++
+	}
+	if curType == 1 {
+		k += 2
 	}
 
-	for i := 0; i < len(kicks) && str == ""; i++ {
-		str = move((*kicks)[i][0], -(*kicks)[i][1], lastRotation)
+	for _, v := range kicks[k][rotation] {
+		str := move(v[0], -v[1], lastRotation)
+		if str != "" {
+			return str
+		}
 	}
-	if str == "" {
-		rotation = lastRotation
-	}
-	return str
+	rotation = lastRotation
+	return ""
 }
 
 func move(dx int, dy int, lastRotation int) string {
@@ -397,10 +360,9 @@ func move(dx int, dy int, lastRotation int) string {
 		return getGhost(lastRotation, true) +
 			pieceString(backup[lastRotation], colors[0], "  ") +
 			pieceString(curPiece[rotation], colors[curType], "  ")
-	} else {
-		curPiece = backup
-		return ""
 	}
+	curPiece = backup
+	return ""
 }
 
 func getGhost(lastRotation int, clear bool) string {
@@ -436,7 +398,7 @@ func newPiece(shape int) string {
 }
 
 func flashLines(ar []int) int64 {
-	mid := H >> 1
+	mid := width >> 1
 	var delay int64
 	for h := 1; h <= mid; h++ {
 		set := ""
@@ -445,19 +407,19 @@ func flashLines(ar []int) int64 {
 				colors[0] + cord(mid+h-1, v) + "  "
 		}
 		fmt.Print(set)
-		delay += pause(LCD)
+		delay += pause(lineClearDelay)
 	}
 	return delay
 }
 
-func clearLines(ar []int) [V][H]int {
-	var cleared [V][H]int
-	var lines [V]int
-	pos := V - 1
+func clearLines(ar []int) [height][width]int {
+	var cleared [height][width]int
+	var lines [height]int
+	pos := height - 1
 	for _, line := range ar {
 		lines[line] = 1
 	}
-	for i := V - 1; i >= 0; i-- {
+	for i := height - 1; i >= 0; i-- {
 		if lines[i] == 1 {
 			continue
 		}
@@ -467,7 +429,7 @@ func clearLines(ar []int) [V][H]int {
 	return cleared
 }
 
-func evalScore(ar []int) int {
+func evalScore(level int, ar []int) int {
 	var s int
 	list := make([][2]int, 0, 4)
 	first, last := ar[0], ar[0]
@@ -488,7 +450,7 @@ func evalScore(ar []int) int {
 
 func refreshString() string {
 	var set string
-	for y := 2; y < V; y++ {
+	for y := 2; y < height; y++ {
 		for x, v := range grid[y] {
 			set += colors[v] + cord(x, y) + "  "
 		}
@@ -497,7 +459,7 @@ func refreshString() string {
 }
 
 func highestRow(piece [4][2]int) int {
-	min := V
+	min := height
 	for _, point := range piece {
 		if point[1] < min {
 			min = point[1]
@@ -506,7 +468,7 @@ func highestRow(piece [4][2]int) int {
 	return min
 }
 
-type Event struct {
+type keyEvent struct {
 	_     syscall.Timeval
 	Kind  uint16
 	Code  uint16
@@ -521,20 +483,18 @@ func in(kbd string) {
 		exit = true
 		return
 	}
-	var ev Event
-	for {
-		binary.Read(file, binary.LittleEndian, &ev)
-		if ev.Kind != 1 /* EV_KEY */ {
-			continue
-		}
-		if ev.Code == 1 && ev.Value != 0 {
-			exit = true
-			return
-		}
-		if ev.Value == 1 {
-			keys[int(ev.Code)] = [2]bool{true, false}
-		} else if ev.Value == 0 && keys[int(ev.Code)][1] {
-			keys[int(ev.Code)] = [2]bool{false, false}
+	var ev keyEvent
+	for !exit {
+		err = binary.Read(file, binary.LittleEndian, &ev)
+		if err == nil && ev.Kind == 1 {
+			if ev.Value == 1 {
+				keyStates[int(ev.Code)] = [2]bool{true, false}
+			} else if ev.Value == 0 && keyStates[int(ev.Code)][1] {
+				keyStates[int(ev.Code)] = [2]bool{false, false}
+			}
+			if ev.Code == 1 {
+				exit = true
+			}
 		}
 	}
 }

@@ -13,14 +13,15 @@ send an email to my gmail address: bendypauldron
 * Various timings such as line clear delay, soft drop rate, DAS, lock delay,
   and new piece delay. They can be configured in the source.
 * Next piece preview.
+* Hold piece.
 * Classic scoring.
-* NES tetris ui layout.
+* NESish tetris ui layout.
 
 ### Controls
 Controls use scancodes. You can find a list of codes in linux/include/uapi/linux/input-event-codes.h
 and change these in the source.
 
-a - left, s - soft drop, f - right, space - hard drop, j - rotate left, k - rotate right
+w - hold, a - left, s - soft drop, f - right, space - hard drop, j - rotate left, k - rotate right
 
 ### Install (or update)
 ```shell
