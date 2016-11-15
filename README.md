@@ -10,10 +10,9 @@ send an email to my gmail address: bendypauldron
 * Hard drop
 * Ghost piece
 * Standard Rotation System.
-* Various timings such as line clear delay, soft drop rate, DAS, lock delay,
-  and new piece delay. They can be configured in the source.
+* Line clear delay, lock delay, fps, soft drop rate, and DAS delay & rate (configurable as consts in source for now).
 * Next piece preview.
-* Hold piece.
+* Hold piece. Hold piece buffering.
 * Classic scoring.
 * NESish tetris ui layout.
 

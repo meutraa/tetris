@@ -15,13 +15,12 @@ import (
  * Ghost piece is wrong when alternative rotation states occur. */
 
 const (
-	lineClearDelay    = 66       /* *5 for real value */
-	lockDelay         = 32       /* in frames */
-	fps               = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
-	softDropRate      = 1        /* frames per drop. */
-	dasDelay          = 12       /* in frames, NES = 16 */
-	dasRate           = 3        /* DAS rate in frames, NES = 6 */
-	newPieceDelayMult = 0        /* Multiplier to new piece delay. NES = 1 */
+	lineClearDelay = 66       /* *5 for real value */
+	lockDelay      = 32       /* in frames */
+	fps            = 16639267 /* nano seconds per frame, 1,000,000,000/fps */
+	softDropRate   = 1        /* frames per drop. */
+	dasDelay       = 12       /* in frames, NES = 16 */
+	dasRate        = 3        /* DAS rate in frames, NES = 6 */
 
 	/* Controls - see linux/include/uapi/linux/input-event-codes.h */
 	softDropKey, hardDropKey      = 32, 57
@@ -60,9 +59,6 @@ var (
 	speeds = [...]int{48, 43, 38, 33, 28, 23, 18, 13, 8, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3,
 		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
 
-	ARE = [height]int{166, 166, 200, 200, 200, 200, 233, 233, 233, 233, 266, 266, 266, 266,
-		300, 300, 300, 300, 333, 333, 333, 333}
-
 	/* cKicks, acKicks, cLKicks, acLKicks */
 	kicks = [4][4][5][2]int{{{{0, 0}, {-1, 0}, {-1, 1}, {0, -2}, {-1, -2}}, /*0->1*/
 		{{0, 0}, {1, 0}, {1, -1}, {0, 2}, {1, 2}},     /*1->2*/
@@ -93,15 +89,6 @@ var (
 	nextType                     = r.Intn(7) + 1
 	scores                       = [4]int{40, 100, 300, 1200}
 )
-
-func hasZeros(ar [width]int) bool {
-	for _, v := range ar {
-		if v == 0 {
-			return true
-		}
-	}
-	return false
-}
 
 func cord(x int, y int) string {
 	return fmt.Sprintf("\033[%d;%dH", y+2, (x+2)<<1)
@@ -241,18 +228,37 @@ func main() {
 				grid[v[1]][v[0]] = curType
 			}
 
-			/* Check lines. */
+			/* Check lines and add score. */
 			l := make([]int, 0, 4)
+			lc, last := 0, -1
 			for i, v := range grid {
-				if !hasZeros(v) {
+				var zeros bool
+				for _, w := range v {
+					if w == 0 {
+						zeros = true
+						break
+					}
+				}
+				if !zeros {
 					l = append(l, i)
+					if lc == 0 || last+1 == i {
+						lc++
+					}
+					last = i
+				}
+				if zeros || height-1 == i {
+					if lc > 0 {
+						score += (level + 1) * scores[lc-1]
+					}
+					lc = 0
 				}
 			}
+
 			if len(l) > 0 {
-				nextFrame += flashLines(l)
+				flashLines(l)
 				grid = clearLines(l)
 				frameBuffer += refreshString()
-				score += evalScore(level, l)
+				//score += evalScore(level, l)
 				frameBuffer += fmt.Sprintf("\033[49m\033[37m%s%.6d", cord(scoreX, scoreY+2), score)
 			}
 
@@ -268,7 +274,6 @@ func main() {
 				exit = true
 			}
 			lockCount = 0
-			nextFrame += pause(newPieceDelayMult * ARE[highestRow(curPiece[rotation])])
 		} else if lockCount > 0 {
 			lockCount++
 		} else if frame >= 0 && frame%speeds[level] == 0 {
@@ -287,11 +292,6 @@ func main() {
 			time.Sleep(time.Microsecond * time.Duration(dt/1000))
 		}
 	}
-}
-
-func pause(duration int) int64 {
-	time.Sleep(time.Millisecond * time.Duration(duration))
-	return int64(duration) * 1000000
 }
 
 func isValid(piece [4][2]int) bool {
@@ -397,9 +397,8 @@ func newPiece(shape int) string {
 		pieceString(curPiece[rotation], colors[curType], "  ")
 }
 
-func flashLines(ar []int) int64 {
+func flashLines(ar []int) {
 	mid := width >> 1
-	var delay int64
 	for h := 1; h <= mid; h++ {
 		set := ""
 		for _, v := range ar {
@@ -407,9 +406,8 @@ func flashLines(ar []int) int64 {
 				colors[0] + cord(mid+h-1, v) + "  "
 		}
 		fmt.Print(set)
-		delay += pause(lineClearDelay)
+		time.Sleep(time.Millisecond * lineClearDelay)
 	}
-	return delay
 }
 
 func clearLines(ar []int) [height][width]int {
@@ -429,25 +427,6 @@ func clearLines(ar []int) [height][width]int {
 	return cleared
 }
 
-func evalScore(level int, ar []int) int {
-	var s int
-	list := make([][2]int, 0, 4)
-	first, last := ar[0], ar[0]
-	for _, n := range ar[1:] {
-		if n-1 == last {
-			last = n
-		} else {
-			list = append(list, [2]int{first, last})
-			first, last = n, n
-		}
-	}
-	list = append(list, [2]int{first, last})
-	for _, v := range list {
-		s += scores[v[1]-v[0]] * (level + 1)
-	}
-	return s
-}
-
 func refreshString() string {
 	var set string
 	for y := 2; y < height; y++ {
@@ -456,16 +435,6 @@ func refreshString() string {
 		}
 	}
 	return set
-}
-
-func highestRow(piece [4][2]int) int {
-	min := height
-	for _, point := range piece {
-		if point[1] < min {
-			min = point[1]
-		}
-	}
-	return min
 }
 
 type keyEvent struct {
