@@ -1,5 +1,9 @@
 package main
 
+// #include <linux/input-event-codes.h>
+// #include <linux/input.h>
+import "C"
+
 import (
 	"encoding/binary"
 	"flag"
@@ -23,10 +27,11 @@ const (
 	dasRate        = 3        /* DAS rate in frames, NES = 6 */
 
 	/* Controls - see linux/include/uapi/linux/input-event-codes.h */
-	softDropKey, hardDropKey      = 32, 57
-	leftKey, rightKey             = 31, 33
-	rotateLeftKey, rotateRightKey = 36, 37
-	holdKey                       = 18
+	softDropKey, hardDropKey      = C.KEY_S, C.KEY_SPACE
+	leftKey, rightKey             = C.KEY_A, C.KEY_D
+	rotateLeftKey, rotateRightKey = C.KEY_J, C.KEY_K
+	holdKey                       = C.KEY_W
+	quitKey                       = C.KEY_ESC
 
 	/* UI positions */
 	width, height  = 10, 22
@@ -400,12 +405,10 @@ func newPiece(shape int) string {
 func flashLines(ar []int) {
 	mid := width >> 1
 	for h := 1; h <= mid; h++ {
-		set := ""
 		for _, v := range ar {
-			set += colors[0] + cord(mid-h, v) + "  " +
-				colors[0] + cord(mid+h-1, v) + "  "
+			fmt.Print(colors[0] + cord(mid-h, v) + "  " +
+				colors[0] + cord(mid+h-1, v) + "  ")
 		}
-		fmt.Print(set)
 		time.Sleep(time.Millisecond * lineClearDelay)
 	}
 }
@@ -439,7 +442,7 @@ func refreshString() string {
 
 type keyEvent struct {
 	_     syscall.Timeval
-	Kind  uint16
+	Type  uint16
 	Code  uint16
 	Value uint32
 }
@@ -455,13 +458,13 @@ func in(kbd string) {
 	var ev keyEvent
 	for !exit {
 		err = binary.Read(file, binary.LittleEndian, &ev)
-		if err == nil && ev.Kind == 1 {
+		if err == nil && ev.Type == C.EV_KEY {
 			if ev.Value == 1 {
 				keyStates[int(ev.Code)] = [2]bool{true, false}
 			} else if ev.Value == 0 && keyStates[int(ev.Code)][1] {
 				keyStates[int(ev.Code)] = [2]bool{false, false}
 			}
-			if ev.Code == 1 {
+			if ev.Code == quitKey {
 				exit = true
 			}
 		}

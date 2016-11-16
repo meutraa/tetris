@@ -20,7 +20,7 @@ send an email to my gmail address: bendypauldron
 Controls use scancodes. You can find a list of codes in linux/include/uapi/linux/input-event-codes.h
 and change these in the source.
 
-w - hold, a - left, s - soft drop, f - right, space - hard drop, j - rotate left, k - rotate right
+w - hold, a - left, s - soft drop, d - right, space - hard drop, j - rotate left, k - rotate right
 
 ### Install (or update)
 ```shell
